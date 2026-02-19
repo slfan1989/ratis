@@ -162,7 +162,23 @@ public class NettyRpcProxy implements Closeable {
     synchronized ChannelFuture offer(RaftNettyServerRequestProto request,
         CompletableFuture<RaftNettyServerReplyProto> reply) throws AlreadyClosedException {
       replies.offer(reply);
-      return client.writeAndFlush(request);
+      final ChannelFuture future;
+      try {
+        future = client.writeAndFlush(request);
+      } catch (AlreadyClosedException e) {
+        replies.remove(reply);
+        throw e;
+      }
+      future.addListener(cf -> {
+        if (!cf.isSuccess()) {
+          synchronized (Connection.this) {
+            if (replies.remove(reply)) {
+              reply.completeExceptionally(cf.cause());
+            }
+          }
+        }
+      });
+      return future;
     }
 
     synchronized CompletableFuture<RaftNettyServerReplyProto> pollReply() {
